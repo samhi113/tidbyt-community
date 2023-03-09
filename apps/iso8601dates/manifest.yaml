@@ -1,0 +1,8 @@
+---
+id: iso-8601-dates
+name: ISO 8601 Dates
+summary: Display ISO8601 Dates
+desc: Display different ISO8601 date formats.
+author: jvivona
+fileName: iso_8601_dates.star
+packageName: iso8601dates
