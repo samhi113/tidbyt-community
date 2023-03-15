@@ -30,4 +30,3 @@ def main(config):
     print(current_time.format("Monday January 2, 2006"))
 
     return []
-
