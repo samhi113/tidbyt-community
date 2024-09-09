@@ -1,8 +1,8 @@
 """
-Applet: Solar Manager Ch
-Summary: Show solarmanager.ch status
-Description: Multiple screen selections will disable animations. For animated screens, run separate instances of the app and select 1 screen per instance.  For API Key : authorize with your Solarmanager username and password at: https://external-web.solar-manager.ch/swagger and copy the long string that follows after '-H authorization: Basic'.  For Site ID : check the back of your solarmanager device for the SMID code.  If you have an aux sensor the ID can be found be executing the GET/v1/info/senors/(smid) command on the solarmanager API. Add your car's sensor ID by copying the value found in the "Data" section in the Solarmanager API. For multiple cars use a separate app instance.
-Author: tavdog, marcbaier
+Applet: HASS Solar
+Summary: Home Assistant PV monitor
+Description: Energy production and consumption monitor using Home Assistant.
+Author: ingmarstein
 """
 
 load("encoding/base64.star", "base64")
@@ -11,10 +11,69 @@ load("http.star", "http")
 load("humanize.star", "humanize")
 load("render.star", "render")
 load("schema.star", "schema")
-load("time.star", "time")
+
+CACHE_TTL = 10
 
 DEBUG = False
 #DEBUG = True # set to True to skip api calls and use dummy data
+
+HA_URL = "ha_url"
+HA_TOKEN = "ha_token"
+
+ENTITY_ENERGY_PRODUCTION = "entity_energy_production"
+ENTITY_ENERGY_CONSUMPTION = "entity_energy_consumption"
+ENTITY_ENERGY_EV_DAY = "entity_energy_ev_day"
+ENTITY_ENERGY_EV_WEEK = "entity_energy_ev_week"
+ENTITY_ENERGY_EV_MONTH = "entity_energy_ev_month"
+ENTITY_POWER_SOLAR = "entity_power_solar"
+ENTITY_POWER_GRID = "entity_power_grid"
+ENTITY_POWER_LOAD = "entity_power_load"
+ENTITY_POWER_BATTERY = "entity_power_battery"
+ENTITY_SOC_BATTERY = "entity_soc_battery"
+ENTITY_SOC_EV = "entity_soc_ev"
+ENTITY_AUTARKY_DAY = "entity_autarky_day"
+ENTITY_AUTARKY_WEEK = "entity_autarky_week"
+ENTITY_AUTARKY_MONTH = "entity_autarky_month"
+ENTITY_AUTARKY_YEAR = "entity_autarky_year"
+
+LANGUAGE_LOCALES = {
+    "Energy Today": {
+        "de": "Energie heute",
+        "en": "Energy Today",
+    },
+    "Today:": {
+        "de": "Heute:",
+        "en": "Today:",
+    },
+    "Week:": {
+        "de": "Woche:",
+        "en": "Week:",
+    },
+    "Month:": {
+        "de": "Monat:",
+        "en": "Month:",
+    },
+    "Year:": {
+        "de": "Jahr:",
+        "en": "Year:",
+    },
+    "EV Energy": {
+        "de": "Auto Energie",
+        "en": "EV Energy",
+    },
+    "D": {
+        "de": "T",
+        "en": "D",
+    },
+    "W": {
+        "de": "W",
+        "en": "W",
+    },
+    "M": {
+        "de": "M",
+        "en": "M",
+    },
+}
 
 GRAY = "#777777"
 RED = "#AA0000"  # very bright at FF, dim a little to AA
@@ -22,10 +81,6 @@ GREEN = "#00FF00"
 ORANGE = "#FFA500"
 YELLOW = "#FFFF00"
 WHITE = "#FFFFFF"
-
-SOLAR_MANAGER_LOGO = base64.decode("""
-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
-""")
 
 BATTERY_0_TO_25_MAIN_SCREEN = base64.decode("""
 iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAIRlWElmTU0AKgAAAAgABQESAAMAAAABAAEAAAEaAAUAAAABAAAASgEbAAUAAAABAAAAUgEoAAMAAAABAAIAAIdpAAQAAAABAAAAWgAAAAAAAABIAAAAAQAAAEgAAAABAAOgAQADAAAAAQABAACgAgAEAAAAAQAAABCgAwAEAAAAAQAAABAAAAAAx28c8QAAAAlwSFlzAAALEwAACxMBAJqcGAAAAVlpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDYuMC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6dGlmZj0iaHR0cDovL25zLmFkb2JlLmNvbS90aWZmLzEuMC8iPgogICAgICAgICA8dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPgogICAgICA8L3JkZjpEZXNjcmlwdGlvbj4KICAgPC9yZGY6UkRGPgo8L3g6eG1wbWV0YT4KGV7hBwAAAitJREFUOBGlU81r1FAQn/eSzcduKGrBlRUseBJaRARBelDU3jwIQj146t/hKf4RXjx78qMHUTxYFQQpqFso2JNViwq7Lq1d2ybpJi9vnHnZtMlRnCUvk5n5/ebrrYCqIAj6IZve//h1UyKc/p0kuBntbdw+P/PEhFZiqlAgmGADIkp6yeXvPz9vZIgfh7v4oLv6Zf4hWCGG7DuIZXUMAiEo852lmbaV7b/yA3nEd84cleA7OeagcC9V6tt2sqv+WOhdC6+v9ZESMsZmlluPgJlziLK2HcjpRqMFO+lTuNx5aXK87c3ZfuNcU7nxySzO2mTslxhT0vR80bfTShRggiAj7XuAg3QFBmkXPJcbjLXWI2i0tCICKDGmArgbkimE3voU9aeF6ztCWqfgq7rPseDZc0LnSoyiBLQpeh1KjCEITRjAh8cdRE7gUEpq0BYd41GoqcEcYLhDQy7mWGIOCNgQTKagKU66fFAgDdAIkTFB7hIRmA6oXq4ZwBDQ20iaEo61nAAcWyyJFcPFxUljNyZzFPUcfv+z9t8EtRY4Pd8sZ3xLaGJFRXxjSNunh7qsSY3AIVdCwe8sazzEQwJGXSAfx1SlRrBG3tlE4b3tofCE4B1QQQgWCEy0Fi9onV1Jf7GK1Ai2nMCa2uqLq0uvsUmr0MVO6NQihiZ+unJRPD8W1DDcMgsPU8PCwokbg8HqpSg+7kqhNaLxS6pmpHL5xnU2n01MnIXFxV6J+Qsqw+boee0udAAAAABJRU5ErkJggg==
@@ -71,20 +126,12 @@ BATTERY_CHARGE_STATUS_75_100_10x10 = base64.decode("""
 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
 """)
 
-BATTERY_CHARGE_TEST_10x10 = base64.decode("""
-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
-""")
-
 AUTARKY_16x16 = base64.decode("""
 iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABHNCSVQICAgIfAhkiAAAAAlwSFlzAAAAbwAAAG8B8aLcQwAAABl0RVh0U29mdHdhcmUAd3d3Lmlua3NjYXBlLm9yZ5vuPBoAAAKGSURBVDiNfZJtaM1hGMZ/9/P/73TOzFvIZuMYJ8uStywjhSQhSxvLywdbJNl88V1a2VfJbKVEjVJn+TRqQlvxQfJW7GSRaENsM+Ts5f/y3L44pzPk+Xjd1+/qeu5uUVVy377+usWhyA6E9Sjrbg5OLylw7FDU2FS+obmv/MK9XL8BaKLJANT219cFIrcRiYvV6xHrrUrMoHi6GzQbw1j/hNu1oLfhhiAmEyC7Ph7Nj4bePUVfAittGFbdiF/9NKlWh8RI4Zftb0yMjMsdC5Hh5S1FilrjTHgRhUpBKsTRmr/gTqnUCX6wjIN9S1pefVl+fr4Bb37v8Q4AkzeaHhWkWyGt1tk+Ce6Rhfqd+yJ41NCekWdGdeuQl1dVlmrcIn8uMRe20GPeEWcaZ6jWU7njeKrxlrXEzP9gII6Lzw+a/7TkYbvGrSk3NR/qKydN7sucLAwQkIchTVJ66ZTSjC0WiyR/hma2MaodtYMNBdkAIQC6gKGsZjF4JPCxGelF6bnPJVHvmBGVZ+F4enXWvEFHzCY9ZqAI4e3vvh4FrKVa3+eWfb207ZJB9LERJn8DCJWdKIvUxSdKJbv1+b/WJXv7DyeU8K64UpEsvDz4WxbbwzNgivnGPnbrkwywMNV47bvvVIkQzHODBSZZcumNomc10NZsbA9rgajx2ZgLA+RH7IVQxR3xnZlWZJaoKoLInoG6TmBUXGlIXrwyDMBptbnwktTRlV/82IOYCQfGrFM8NzZemj0kQaRm4NAJQU6CtlnloROd8rTvqzcnHUYOj1mz7VvgrJgb8dvflrce2UyT283p4K9LrB04koDgACprVHTVrcEZhVNd+zHm2EdRR9telbV25/p/AZhtE/ThSw0TAAAAAElFTkSuQmCC
 """)
 
 EV_CHARGING_16x16 = base64.decode("""
 iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAB2AAAAdgFOeyYIAAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAArtJREFUOI11k0to1GcUxX/3+08SMxNFrNpYE9+C8RGliBupJmpiEIKBOMUHFhQXYoVSiKGiJt+oCx0GuhAR6mtVtZlIDBYSkhhEEBcWIRpHRR2Mxlh8YZsZJzaZ73ZjZRzt2V04nHPuS8hCmbW+L5JUApUGZqugCvckLV0vR2vnZWtHMvmSWQTrQxWqehQYVqEFx10DTmG+CjUCBpHvm8ONlz4RqK2320U5iLKzOWJ/AzQrnATr7AYVjoiwOxq2v3wQCNbZFSo0iTHl0cMNt7LbykRtnS0VoVuUb6MR2y3BYJPnpsdixhGKRuwZgAs337QhVH1kL7StnT92zXvDjc7QuMBPiY+pd6pEGYlG7Nmfu/pmeM4UI3yT7azK8iOdT8pGxD3+cdXUs7W77N7eQVntc6IVCC2ASpqZKW9wR0/iYeAz6f2jZOIPuQSOAnGgFaMVPgMzQKIAxn9q2cuhZ9UP/xpDIL+IcTkFALweTpBM9TPT+7u6eNSkXqDLwD2FGp+CoioAJXJj63f5f3iRd8uY++UKKguXAtDx51ViT69Rl3fFu87ircA+T+gYdvLKhxDHMQegXSv7Tw4VfZXSXHqfdPD7wBUA3qaHUC1ke6qGyXlz++Ei58J2ABjwiZMuFY0Ae3IfFbfmxf9ZMmnihAcFCwu2ZQ4g0ZM48fr5i1l5s4sufLSdMmt945PEEAktmvf15TfJ5LH8/MC5A1uqz2QS952+uDGVSq4vyMnZcft+b/k8v/5qrXUCsK4+tBLVaNqY8pbDDT3/d0T7r3csfTeY2Hu//VY4bbTv/CEbNwDN4cZLIvzkOde9rj60iawf+S8tpA/mjvFXTVk+Z7NxUks28X2SY4ADWhG5K6qqUAKsLSwt7ptQMrkUON64uKrhEwGAYLDJc9NiqwVWAdMADyGuSueCAO3WWpfJ/xczZBKg/h8O2gAAAABJRU5ErkJggg==
-""")
-
-CUSTOM_SENSOR_16_16 = base64.decode("""
-iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAPvAAAD7wHnP/QUAAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAohJREFUOI1tUl9I02EUPeeba9Bm/kuzQvPfQpTa1rQCDYR806iQoPAlQoKITKJe1ERKJEIpeqqE6qGXHhxEgVQKFQVK4ZYoUpugZoogKjibP92+24NO1+q83e+ce889l4/YwOeh0fNC+VV+oOhd9O2W31GsqI4ryOSqZe1ja9bIPOJAABgYHU0Lr0pAk5VKowKi+8pcxb62MXc5RF8kkQfATbBbU5qa87wTWwMEbB0ofZtjrprPTjjdYoH5iwlrRUcdjqlYp3a/K10UmwCp1VrO3LT73gMAr73Jz6JJ+yxWM7apxIXChLrXZ92XGuJXjaJtzFVDoCui9bEW+7cRFQlHrocNnbo8b6QGfy/uGIrcexXbsDS458ry1527o3VzvreblA6T4kMAUCCHQawAwFoofL/98I++qHjZm1lKyA1rydxM7FBbJNgJMKc94CxTGYVJ42m5SeMCXkgJ2jqiosWh7BQBX4AYjo9Rbw8YJDyarE4A1H6Thd8fVI0/jQpEwKBv9RnAXAgWgoOZd8QkzxMds5vDRHNEEZUKWhRElmIdQoO7jpDcC2AWxCGQp1YskYlYDaENEbEoAacA5saS292z/TbnTAmJTyBWSJ5LL5z7y0STeaD8VGGL8QGAuzVwMCM+qxa4CF62Oqe98RzIExT0qo3v6TEzoTGWX/DmJBPotzqnn8T3tvmdJymSapNgjwIAIRoBqW0bc9VERcmhsGENmerim2/73flU7KJIQ709YHCLcFYoRQ8pHbZIsLPeHjD+56wUH0PY2VgweHf9mDG45XcUm5R6BGAfCQ8gw6JpCJG/nllSRcvVZrvv5eYp/jkOgPaAs0yT1QQKAFgAmaSg1ybBnvjN/gABgQjIrnX3XQAAAABJRU5ErkJggg==
 """)
 
 # need 5 items because 100% is index 4
@@ -180,210 +227,144 @@ FIAT_LOGO_18x18 = base64.decode("""
 iVBORw0KGgoAAAANSUhEUgAAABIAAAASCAYAAABWzo5XAAAEYklEQVQ4jT2U229TBQCHv9NzbU+v67a26zZ2YxtgHNPJXcWADszmSDQmagzJlphoiJf/wASjRmQqooiS+ABqYsREBAXN0MgtglFuRRiBrbtA17Vdb1uvp8ewBx9/D9/39MsnDA/vwTRNRFFEUWTS6XkikbvPZzPpPqumdvnrgtWeKq8hK8q0IkvnM+n09/F4fMRqtaEoEqbJIivdk8iyvDhGR8cenwjf/jAQ8C1vaG1BstmQdR3B7kAVxYAqCD26TXvF7/ediESiLycSiTFVVRZ56Z5AEATCY5MvORy2/YOv7iA7X+T65UtEb9yklEqRWshyt5wFRaWjbQX3LevsbW5quKqpSm+hWDpts1kR9n12gJs3bvVHIlNHXhjczszVUX7c/ymV22HqiwJB7OjYiVLkb6JMuSxUagOsfHQjwzvfQnc6+n/+6cRRKTmX8kxMjB++eusapZ1vM/7HSQLA/UAT1QSpxYeGV/ezUMhxLDXCydRNRhdK/PpUP4898ODH4YnJo2JXV8+7k3cm1llFidZIAmsiRu/mbQT9HTiKDtyNDahPP0LOApW2AN1r+uluWUL0zjTv/3IMuWS4Fav1rNjTs+pLZMHeVBvAee4fWga2sXnXTiK3x/EObEbobiO//Qm0ei+pfIbA/jeoigtk/rxGuL2WGpebZZ3L7ZZiIeeWFJmO9k5spoBY7WF671dEPt9FyaqRtyksvP4J2YujiNNpwgePM/7OQZxzZbZu2URJsJBMZVZZcrn5sq47eGjNWlRZITV6i0pXO47gStK3xpm/M0OuNUDOX0WuzslCLAEemXgmzoZ1D1MuG4RCV1wW0SJi1x3UtLSiOh0UpyMU2oKYTQ0UZmPk40lm66ykaqwUxQr5+QzZ+SQZqcyK7pUsaWwgHouZFk3TZMEwSBSLuFoaKUoWFo6fIntmBMOtU/Q50Q7/Rmnft+T9HoxKidnkDPaOJvyqlXKpjFkxUxZZ0TK51BzXR0NUdbaDYYLfRwHL4qv1uiBSfS2STUWtrUH2eonlMjRuXE0CCF26jLfKc0UyDPMH0zSHvtjzAetRqa6uITYVJiVUSE5NYreYFDNp8tE4uVAIM5FghhybBno5fe4vpifDLOvsPCTpdv3N5Fx+yKsouFavJX7gEL8PH6Ne9pL86huUSgVZlDAMg2zoPHHm8XgbGHN4OHv0MEvblkY0q/a11Ny8ZOp6obBD1/S9Tz73LLFaPxcGX2SmFEcETAADFEAGdEnFvrWPU2dOYyxkaGhqfsZu1xG3bNmK2+25MDsbt126cH79qoE+6upaKBsV3LoHj6Mar8ePzVNLxRdEW78Bx/JWKokousMz6K5yHTErBsLu3R9xLwWCIPJv6NpQrpB/r6a5sUqSJByKilk0KJRKTEejJHJZLEYZn80eqq7xveZ0OUdEUaBUKvN/2CRZQpYVYrNxTyw6M1QoFvsM6JA11SqIkimLUsrjdF2ULZbvZEU6ZLVqGEYZw6ggCAL/AXM414OenkHTAAAAAElFTkSuQmCC
 """)
 
-URL_CUR = "https://cloud.solar-manager.ch/v1/stream/gateway/{}"
-URL_SUM = "https://cloud.solar-manager.ch/v1/consumption/gateway/{}?period=day"
-URL_AUT = "https://cloud.solar-manager.ch/v1/statistics/gateways/{}?accuracy=low&from={}&to={}"
-URL_AUX = "https://cloud.solar-manager.ch/v1/consumption/sensor/{}?period={}"
-
-# 5 minutes cache time
-CACHE_TTL = 300
-
-# combined summary and current dummy data
-DUMMY_DATA = {
-    "currentBatteryChargeDischarge": 50.0,
-    "currentPowerConsumption": 1950.0,
-    "currentPvGeneration": 0.0,
-    "soc": 10,
-    "consumption": 1000.96,
-    "production": 3000.11,
-    "has_battery": True,
-    "autarky_day": 100,
-    "autarky_24h": 75,
-    "autarky_month": 50,
-    "autarky_year": 25,
-    "aux_sensor_day": 10000,
-    "aux_sensor_week": 10000,
-    "aux_sensor_month": 10000,
-    "123456": 25,  # dummy item for EV battery soc
-}
-
-def w2kwstr(w, dec = None):  # rounds off decimal, removes completey if over 100kw
-    if w == None:
-        return "0"
-    if w < 10000 and dec == None:
-        if w < 0:  # CURRENTLY DISABLED
-            return str(int(w / 1000 * 100) / 100.0)  # show two decimal places
-        else:
-            return str(int(w / 1000 * 10) / 10.0)  # show 1 decimal place
-    elif dec == 2:
-        return humanize.float("###.##", int(w / 1000 * 100) / 100.0)  # show two decimal places
-    elif dec == 1:
-        return str(int(w / 1000 * 10) / 10.0)  # show 1 decimal place
-    else:
-        return str(int(w / 1000))  # show 0 decimal places
-
 def render_fail(rep):
     content = json.decode(rep.body())
-    return render.Root(render.Box(render.WrappedText(content["error"] + " " + str(rep.status_code) + " : " + content["message"], color = RED)))
+    return render.Root(render.Box(render.WrappedText(str(rep.status_code) + " : " + content["String"], color = RED)))
 
-def get_aux_sensor_data(sensor_id, api_key, period):
-    # 'https://cloud.solar-manager.ch/v1/consumption/sensor/62a7324c7ffb2aabdaf96b8d?period=day'
-    # user 1 hour for http cache TTL
-    print(URL_AUX.format(sensor_id, period))
-    res = http.get(
-        URL_AUX.format(sensor_id, period),
-        headers = {
-            "Accept": "application/json",
-            "Authorization": "Basic " + api_key,
-        },
-        ttl_seconds = 60 * 60,  # 1 hour http cache ttl
-    )
-    if res.status_code != 200:
-        print(res.body())
-        return 0
-    print(res.headers.get("Tidbyt-Cache-Status"))
-    return res.json().get("totalConsumption")
+def fetch_entity(entity_id, config):
+    if DEBUG or config.get(HA_URL) == None:
+        if entity_id.startswith("entity_energy"):
+            return {
+                "entity_id": "{}".format(entity_id),
+                "state": "130.12",
+                "attributes": {
+                    "state_class": "total_increasing",
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                },
+            }
+        elif entity_id.startswith("entity_soc"):
+            return {
+                "entity_id": "{}".format(entity_id),
+                "state": "80",
+                "attributes": {
+                    "raw_soc": 80,
+                    "state_class": "measurement",
+                    "unit_of_measurement": "%",
+                    "device_class": "energy",
+                },
+            }
+        elif entity_id.startswith("entity_autarky"):
+            return {
+                "entity_id": "{}".format(entity_id),
+                "state": "97",
+                "attributes": {
+                    "state_class": "measurement",
+                    "unit_of_measurement": "%",
+                },
+            }
+        else:
+            return {
+                "entity_id": "{}".format(entity_id),
+                "state": "9886.0",
+                "attributes": {
+                    "state_class": "measurement",
+                    "unit_of_measurement": "W",
+                    "device_class": "power",
+                },
+            }
 
-def get_autarky_percent(site_id, api_key, tz, interval):
-    now = time.now().in_location(tz)
-    start_string = ""
-    now_string = humanize.time_format("yyyy-MM-ddTHH:00", now)
-    if interval == "day":  # from the start of today to now, just set time to 00:00
-        start_string = humanize.time_format("yyyy-MM-ddT00:00", now)
-        now_string = humanize.time_format("2006-01-02T15:04", now)
-    elif interval == "24h":  # the last 24hr from now, use a now-duration
-        duration = time.parse_duration("24h")
-        start_time = now - duration
-        start_string = humanize.time_format("yyyy-MM-ddTHH:00", start_time)
-    elif interval == "month":  # from the start of the month to now, just set day to 01 and time to 00:00
-        month = now.month
-        if now.month < 10:  # pad a zero if less then 10
-            month = "0" + str(month)
-        start_string = "{}-{}-01T00:00".format(now.year, month)
-    elif interval == "year":  # from the start of the year to now, set month/day to 01/01 and time to 00:00
-        start_string = "{}-01-01T00:00".format(now.year)
-    url = URL_AUT.format(site_id, start_string, now_string)
-    print(url)
-    rep = http.get(
-        url,
-        headers = {
-            "Accept": "application/json",
-            "Authorization": "Basic " + api_key,
-        },
-        ttl_seconds = 60 * 60,  # 1 hour cache
-    )
+    entity_id = config.get(entity_id)
+    if entity_id:
+        rep = http.get(config.get(HA_URL) + "/api/states/" + entity_id, ttl_seconds = 10, headers = {
+            "Authorization": "Bearer " + config.get(HA_TOKEN),
+        })
+        if rep.status_code != 200:
+            fail("%s request failed with status %d: %s" % (entity_id, rep.status_code, rep.body()))
+        return rep.json()
+    return None
 
-    if rep.status_code != 200:
-        print(rep.status_code)
-        return 0
-    print(rep.headers.get("Tidbyt-Cache-Status"))
-    autarky = rep.json().get("autarchyDegree", 0)
-    return int(autarky)
+def get_time_zone(config):
+    return config.get("$tz", "Etc/UTC")
 
-#######################################
+def unit_for_entity(entity):
+    if "attributes" in entity and "unit_of_measurement" in entity["attributes"]:
+        return entity["attributes"]["unit_of_measurement"]
+    return None
+
+def render_entity(entity, absolute_value = False, convert_to_kw = False, with_unit = True, dec = None):
+    if not entity:
+        return ""
+
+    state = entity["state"]
+    if not state or state == "unknown" or state == "unavailable":
+        return ""
+
+    value = float(state)
+    if absolute_value:
+        value = abs(value)
+
+    unit = unit_for_entity(entity)
+    if unit == "W" and convert_to_kw:
+        unit = "kW"
+        value = value / 1000.0
+
+    if dec == None:
+        if value < 10:
+            value_str = humanize.float("#,###.#", value)
+        else:
+            value_str = humanize.float("#,###.", value)
+    elif dec == 2:
+        value_str = humanize.float("#,###.##", value)
+    elif dec == 1:
+        value_str = humanize.float("#,###.#", value)
+    elif dec == 0:
+        value_str = humanize.float("#,###.", value)
+    else:
+        value_str = "0"
+
+    if with_unit and unit:
+        if unit == "%":
+            return value_str + unit
+        return value_str + " " + unit
+
+    return value_str
 
 def main(config):
-    api_key = config.str("api_key")
-    site_id = config.str("site_id")
-    tz = config.get("$tz", "Europe/Zurich")
-    has_battery = False  #  assume no battery until we have data
+    lang = config.get("lang", "en")
 
-    # verify api key doesn't have non key characters in there eg. "Basic"
-    if api_key and "Basic" in api_key:
-        b_index = api_key.find("Basic")
-        api_key = api_key[b_index + 6:]
-        print("corrected api_key : " + api_key)
+    # fetch data from HA
+    energy_consumption = fetch_entity(ENTITY_ENERGY_CONSUMPTION, config)
+    energy_production = fetch_entity(ENTITY_ENERGY_PRODUCTION, config)
+    energy_ev_day = fetch_entity(ENTITY_ENERGY_EV_DAY, config)
+    energy_ev_week = fetch_entity(ENTITY_ENERGY_EV_WEEK, config)
+    energy_ev_month = fetch_entity(ENTITY_ENERGY_EV_MONTH, config)
+    power_solar = fetch_entity(ENTITY_POWER_SOLAR, config)
+    power_grid = fetch_entity(ENTITY_POWER_GRID, config)
+    power_load = fetch_entity(ENTITY_POWER_LOAD, config)
+    power_battery = fetch_entity(ENTITY_POWER_BATTERY, config)
+    soc_battery = fetch_entity(ENTITY_SOC_BATTERY, config)
+    soc_ev = fetch_entity(ENTITY_SOC_EV, config)
+    autarky_day = fetch_entity(ENTITY_AUTARKY_DAY, config)
+    autarky_week = fetch_entity(ENTITY_AUTARKY_WEEK, config)
+    autarky_month = fetch_entity(ENTITY_AUTARKY_MONTH, config)
+    autarky_year = fetch_entity(ENTITY_AUTARKY_YEAR, config)
 
-    if not DEBUG and api_key and site_id:
-        url = URL_CUR.format(site_id)
-        print(url)
-        data = dict()
-        rep = http.get(
-            url,
-            headers = {
-                "Accept": "application/json",
-                "Authorization": "Basic " + api_key,
-            },
-            ttl_seconds = 300,  # 5 minutes
-        )
-        if rep.status_code != 200:
-            print(rep.body())
-            return render_fail(rep)
-
-        cur_data = json.decode(rep.body())
-        data["currentPowerConsumption"] = float(cur_data["currentPowerConsumption"])
-        data["currentPvGeneration"] = float(cur_data["currentPvGeneration"])
-        data["currentBatteryChargeDischarge"] = 0.0  # set to zero just to be safe
-        data["soc"] = 0  # set to zero just to be safe
-
-        if "currentBatteryChargeDischarge" in cur_data and "soc" in cur_data:
-            data["currentBatteryChargeDischarge"] = float(cur_data["currentBatteryChargeDischarge"])
-            data["soc"] = cur_data["soc"]
-            data["has_battery"] = True
-            has_battery = True
-
-        url = URL_SUM.format(site_id)
-        rep = http.get(
-            url,
-            headers = {
-                "Accept": "application/json",
-                "Authorization": "Basic " + api_key,
-            },
-            ttl_seconds = 60 * 60,
-        )
-        if rep.status_code != 200:
-            return render_fail(rep)
-
-        sum_data = json.decode(rep.body())
-        data["consumption"] = sum_data["data"][0]["consumption"]
-        data["production"] = sum_data["data"][0]["production"]
-
-        if config.bool("show_autarky", False) == True:
-            data["autarky_day"] = get_autarky_percent(site_id, api_key, tz, "day")
-            data["autarky_24h"] = get_autarky_percent(site_id, api_key, tz, "24h")
-            data["autarky_month"] = get_autarky_percent(site_id, api_key, tz, "month")
-            data["autarky_year"] = get_autarky_percent(site_id, api_key, tz, "year")
-        else:
-            data["autarky_day"] = None  #get_autarky_percent(site_id, api_key, tz, "day")
-            data["autarky_24h"] = None  #get_autarky_percent(site_id, api_key, tz, "24h")
-            data["autarky_month"] = None  #= get_autarky_percent(site_id, api_key, tz, "month")
-            data["autarky_year"] = None  #data["autarky_month"] #get_autarky_percent(site_id, api_key, tz, "year")
-
-        data["aux_sensor_day"] = -1
-        data["aux_sensor_week"] = -1
-        data["aux_sensor_month"] = -1
-
-        if config.get("aux_sensor_id", "") != "":
-            data["aux_sensor_day"] = get_aux_sensor_data(config.get("aux_sensor_id"), api_key, "day")
-            data["aux_sensor_week"] = get_aux_sensor_data(config.get("aux_sensor_id"), api_key, "week")
-            data["aux_sensor_month"] = get_aux_sensor_data(config.get("aux_sensor_id"), api_key, "month")
-
-        # look for any items in cur_data with an id and an soc value and store it for later use. eg. if we decide later to turn on ev battery frame
-        for device in cur_data["devices"]:
-            if "soc" in device:
-                print(device)
-                data[str(device["_id"])] = device["soc"]
-                print(str(device["_id"]) + " " + str(device["soc"]))
-
-    else:
-        print("using dummy data")
-        data = DUMMY_DATA
-    print(data)
     frames = []
 
-    if data["currentPvGeneration"] > 0:
+    if power_solar and float(power_solar["state"]) > 0:
         solar_anim = GREEN_ANIM
         solar_icon = SOLAR
-        solar_value = data["currentPvGeneration"]
+        solar_value = power_solar
         solar_color = GREEN
-    elif has_battery:  # only do this if we have battery data
+    elif soc_battery:  # only do this if we have battery data
         # change to battery data even though it's still called solar
-        solar_icon = battery_level_mains[int(data["soc"] / 25)]  # will be integer 0 - 3
-        solar_value = data["currentBatteryChargeDischarge"]
-        if solar_value == 0:
+        solar_icon = battery_level_mains[int(float(soc_battery["state"]) / 25)]  # will be integer 0 - 3
+        solar_value = power_battery
+        if int(float(solar_value["state"])) == 0:
             solar_anim = EMPTY
             solar_color = GRAY
-        elif solar_value > 0:
+        elif float(solar_value["state"]) > 0:
             solar_anim = RED_ANIM
             solar_color = WHITE
         else:
@@ -392,26 +373,18 @@ def main(config):
     else:
         solar_anim = EMPTY
         solar_icon = SOLAR
-        solar_value = data["currentPvGeneration"]  # should be zero
+        solar_value = power_solar  # should be zero
         solar_color = GRAY
 
-    # assuming negative chargerate means battery is discharging, and negative grid rate means pulling from grid.
-    grid_rate = data["currentPvGeneration"] - (data["currentPowerConsumption"] + data["currentBatteryChargeDischarge"])
-    if data["currentPvGeneration"] < 1 and grid_rate > 0:  # not possible to send energy to grid if no solar production
-        grid_rate = 0.0
-    if grid_rate > 9:
+    if power_grid and float(power_grid["state"]) > 9:
         grid_anim = GREEN_ANIM
         grid_color = GREEN
-    elif grid_rate < -9:
+    elif power_grid and float(power_grid["state"]) < -9:
         grid_anim = RED_ANIM
         grid_color = RED
     else:
         grid_anim = EMPTY
         grid_color = GRAY
-
-    # LOGO FRAME
-    #######################################
-    logo_frame = render.Box(render.Image(src = SOLAR_MANAGER_LOGO))
 
     # MAIN FRAME
     #######################################
@@ -431,7 +404,7 @@ def main(config):
                             child = render.Column(
                                 cross_align = "center",
                                 children = [
-                                    render.Text(w2kwstr(abs(solar_value)), color = solar_color),
+                                    render.Text(render_entity(solar_value, absolute_value = True, convert_to_kw = True, with_unit = False), color = solar_color),
                                     render.Text("kW", color = GRAY),
                                 ],
                             ),
@@ -462,14 +435,13 @@ def main(config):
                         render.Image(src = HOUSE, height = 15),
                         render.Padding(
                             pad = (0, 0, 0, 0),
-                            child =
-                                render.Column(
-                                    cross_align = "center",
-                                    children = [
-                                        render.Text(w2kwstr(data["currentPowerConsumption"])),
-                                        render.Text("kW", color = GRAY),
-                                    ],
-                                ),
+                            child = render.Column(
+                                cross_align = "center",
+                                children = [
+                                    render.Text(render_entity(power_load, convert_to_kw = True, with_unit = False)),
+                                    render.Text("kW", color = GRAY),
+                                ],
+                            ),
                         ),
                     ],
                 ),
@@ -500,7 +472,7 @@ def main(config):
                             child = render.Column(
                                 cross_align = "center",
                                 children = [
-                                    render.Text(w2kwstr(abs(grid_rate)), color = grid_color),
+                                    render.Text(render_entity(power_grid, absolute_value = True, convert_to_kw = True, with_unit = False), color = grid_color),
                                     render.Text("kW", color = GRAY),
                                 ],
                             ),
@@ -511,398 +483,381 @@ def main(config):
         ],
     )
 
-    # summary page for daily accumulated generation and consumption
-    ###############################################
-    summary_frame = render.Stack(
-        children = [
-            render.Column(
-                main_align = "space_evenly",  # this controls position of children, start = top
-                expanded = True,
-                cross_align = "center",
-                children = [
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_evenly",
-                        cross_align = "center",
-                        children = [
-                            render.Text("Energy Today"),
-                        ],
-                    ),
-                    render.Row(
-                        #expanded = True,
-                        children = [
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "center",
-                                children = [
-                                    render.Image(src = SUN_SUM),
-                                    render.Image(src = PLUG_SUM),
-                                ],
-                            ),
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "end",
-                                children = [
-                                    render.Text(
-                                        content = " " + w2kwstr(data["production"], dec = 0) + " kWh",
-                                        font = "5x8",
-                                        color = GREEN,
-                                    ),
-                                    render.Text(
-                                        content = " " + w2kwstr(data["consumption"], dec = 0) + " kWh",
-                                        font = "5x8",
-                                        color = RED,
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
+    if config.bool("show_main", True):
+        frames.append(main_frame)
 
     # CHARGE FRAME shows charge/discharge rate and state of charge percent
     #########################################################
-    if data["currentBatteryChargeDischarge"] < 0:
-        BATTERY_FLOW_ICON = BATTERY_DISCHARGE_ANIMATION_10x10
-        flow_color = RED
-    elif data["currentBatteryChargeDischarge"] > 0:
-        BATTERY_FLOW_ICON = BATTERY_CHARGE_ANIMATION_10x10
-        flow_color = GREEN
-    else:
-        BATTERY_FLOW_ICON = BATTERY_NOFLOW_ANIMATION_10x10
-        flow_color = GRAY
-    charge_frame = render.Stack(
-        children = [
-            render.Column(
-                main_align = "space_evenly",  # this controls position of children, start = top
-                expanded = True,
-                cross_align = "center",
-                children = [
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_evenly",
-                        cross_align = "center",
-                        children = [
-                            render.Text(" ", height = 1),
-                        ],
-                    ),
-                    render.Row(
-                        #expanded = True,
-                        children = [
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "center",
-                                children = [
-                                    render.Image(src = battery_level_icons[int(data["soc"] / 25)]),
-                                    render.Image(src = BATTERY_FLOW_ICON),
-                                ],
-                            ),
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "end",
-                                children = [
-                                    render.Text(
-                                        content = " " + str(data["soc"]) + " %",
-                                        font = "5x8",
-                                        #font = "6x13",
-                                        color = soc_color[int(data["soc"] / 25)],
-                                    ),
-                                    render.Text(
-                                        content = " " + humanize.float("#,###.", float(abs(data["currentBatteryChargeDischarge"]))) + " W",
-                                        font = "5x8",
-                                        #font = "6x13",
-                                        #min = a if a < b else b
-                                        color = flow_color,
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
+    if config.bool("show_char", False) and power_battery and soc_battery:
+        if float(power_battery["state"]) < 0:
+            BATTERY_FLOW_ICON = BATTERY_DISCHARGE_ANIMATION_10x10
+            flow_color = RED
+        elif float(power_battery["state"]) > 0:
+            BATTERY_FLOW_ICON = BATTERY_CHARGE_ANIMATION_10x10
+            flow_color = GREEN
+        else:
+            BATTERY_FLOW_ICON = BATTERY_NOFLOW_ANIMATION_10x10
+            flow_color = GRAY
 
-    # CONSUMPTION FRAME
-    verbrauch_frame = render.Box(
-        render.Row(
-            expanded = True,
-            cross_align = "center",
-            main_align = "space_evenly",
+        charge_frame = render.Stack(
             children = [
-                render.Image(src = PLUG),
-                render.Text(
-                    #content = w2kwstr(data["currentPowerConsumption"], dec = 2) + " kW",
-                    content = humanize.float("#,###.", float(data["currentPowerConsumption"])) + " W",
-                    #font = "6x13",
-                    font = "5x8",
-                    color = RED,
+                render.Column(
+                    main_align = "space_evenly",  # this controls position of children, start = top
+                    expanded = True,
+                    cross_align = "center",
+                    children = [
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_evenly",
+                            cross_align = "center",
+                            children = [
+                                render.Text(" ", height = 1),
+                            ],
+                        ),
+                        render.Row(
+                            #expanded = True,
+                            children = [
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "center",
+                                    children = [
+                                        render.Image(src = battery_level_icons[int(float(soc_battery["state"]) / 25)]),
+                                        render.Image(src = BATTERY_FLOW_ICON),
+                                    ],
+                                ),
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "end",
+                                    children = [
+                                        render.Text(
+                                            content = " " + render_entity(soc_battery, dec = 0),
+                                            font = "5x8",
+                                            #font = "6x13",
+                                            color = soc_color[int(float(soc_battery["state"]) / 25)],
+                                        ),
+                                        render.Text(
+                                            content = " " + render_entity(power_battery, dec = 0),
+                                            font = "5x8",
+                                            #font = "6x13",
+                                            #min = a if a < b else b
+                                            color = flow_color,
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
                 ),
             ],
-        ),
-    )
+        )
+        frames.append(charge_frame)
 
     # SOLAR PRODUCTION FRAME
-    production_frame = render.Box(
-        render.Row(
-            expanded = True,
-            cross_align = "center",
-            main_align = "space_evenly",
-            children = [
-                render.Image(src = SUN),
-                render.Text(
-                    #content = w2kwstr(data["currentPvGeneration"], dec = 2) + " kW",
-                    content = humanize.float("#,###.", float(data["currentPvGeneration"])) + " W",
-                    #font = "6x13",
-                    font = "5x8",
-                    color = GREEN,
-                ),
-            ],
-        ),
-    )
-
-    # AUTARKY FRAME
-    autarky_frame = render.Stack(
-        children = [
-            render.Box(
-                height = 32,
-                width = 64,
-                child = render.Image(src = AUTARKY_16x16),
-            ),
-            render.Column(
-                # column for the top
-                main_align = "start",
-                expanded = True,
-                children = [
-                    # top row
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_between",
-                        children = [
-                            render.Row([render.Text("24hr:", font = "tom-thumb", color = GRAY)]),
-                            render.Row([render.Text("Month:", font = "tom-thumb", color = GRAY)]),
-                        ],
-                    ),
-
-                    # second row
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_between",
-                        cross_align = "end",
-                        children = [
-                            render.Row([render.Text(" {}%".format(data["autarky_24h"]), color = GREEN)]),
-                            render.Row([render.Text("{}%".format(data["autarky_month"]), color = GREEN)]),
-                        ],
-                    ),
-                ],
-            ),
-            render.Column(
-                main_align = "end",
-                expanded = True,
-                children = [
-                    # third row
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_between",
-                        children = [
-                            render.Row([render.Text("Today:", font = "tom-thumb", color = GRAY)]),
-                            render.Row([render.Text("Year:", font = "tom-thumb", color = GRAY)]),
-                        ],
-                    ),
-
-                    # fourth row
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_between",
-                        cross_align = "end",
-                        children = [
-                            render.Row([render.Text(" {}%".format(data["autarky_day"]), color = GREEN)]),
-                            render.Row([render.Text("{}%".format(data["autarky_year"]), color = GREEN)]),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    # AUX SENSOR FRAME
-    aux_icon = CUSTOM_SENSOR_16_16
-    if config.get("aux_icon") == "EV":
-        aux_icon = EV_CHARGING_16x16
-    sensor_frame = render.Stack(
-        children = [
-            render.Column(
-                main_align = "space_evenly",  # this controls position of children, start = top
+    if config.bool("show_prod", False):
+        production_frame = render.Box(
+            render.Row(
                 expanded = True,
                 cross_align = "center",
+                main_align = "space_evenly",
                 children = [
-                    render.Text(config.get("aux_sensor_label", "Aux Load"), font = "tom-thumb"),
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_between",
-                        children = [
-                            render.Column(
-                                expanded = True,
-                                main_align = "center",
-                                #cross_align = "center",
-                                children = [
-                                    render.Image(src = aux_icon),
-                                ],
-                            ),
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "start",
-                                children = [
-                                    render.Text(
-                                        content = "D",
-                                        font = "5x8",
-                                        color = GRAY,
-                                    ),
-                                    render.Text(
-                                        content = "W",
-                                        font = "5x8",
-                                        color = GRAY,
-                                    ),
-                                    render.Text(
-                                        content = "M",
-                                        font = "5x8",
-                                        color = GRAY,
-                                    ),
-                                ],
-                            ),
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "end",
-                                children = [
-                                    render.Text(
-                                        content = w2kwstr(data["aux_sensor_day"], dec = 0),
-                                        font = "5x8",
-                                        color = GREEN,
-                                    ),
-                                    render.Text(
-                                        content = w2kwstr(data["aux_sensor_week"], dec = 0),
-                                        font = "5x8",
-                                        color = GREEN,
-                                    ),
-                                    render.Text(
-                                        content = w2kwstr(data["aux_sensor_month"], dec = 0),
-                                        font = "5x8",
-                                        color = GREEN,
-                                    ),
-                                ],
-                            ),
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "start",
-                                children = [
-                                    render.Text(
-                                        content = " kWh",
-                                        font = "5x8",
-                                        color = GRAY,
-                                    ),
-                                    render.Text(
-                                        content = " kWh",
-                                        font = "5x8",
-                                        color = GRAY,
-                                    ),
-                                    render.Text(
-                                        content = " kWh",
-                                        font = "5x8",
-                                        color = GRAY,
-                                    ),
-                                ],
-                            ),
-                        ],
+                    render.Image(src = SUN),
+                    render.Text(
+                        content = render_entity(power_solar),
+                        font = "5x8",
+                        color = GREEN,
                     ),
                 ],
             ),
-        ],
-    )
+        )
+        frames.append(production_frame)
+
+    # CONSUMPTION FRAME
+    if config.bool("show_cons", False):
+        consumption_frame = render.Box(
+            render.Row(
+                expanded = True,
+                cross_align = "center",
+                main_align = "space_evenly",
+                children = [
+                    render.Image(src = PLUG),
+                    render.Text(
+                        content = render_entity(power_load),
+                        #font = "6x13",
+                        font = "5x8",
+                        color = RED,
+                    ),
+                ],
+            ),
+        )
+        frames.append(consumption_frame)
+
+    if energy_production and energy_consumption:
+        # summary page for daily accumulated generation and consumption
+        ###############################################
+        summary_frame = render.Stack(
+            children = [
+                render.Column(
+                    main_align = "space_evenly",  # this controls position of children, start = top
+                    expanded = True,
+                    cross_align = "center",
+                    children = [
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_evenly",
+                            cross_align = "center",
+                            children = [
+                                render.Text(LANGUAGE_LOCALES["Energy Today"][lang]),
+                            ],
+                        ),
+                        render.Row(
+                            #expanded = True,
+                            children = [
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "center",
+                                    children = [
+                                        render.Image(src = SUN_SUM),
+                                        render.Image(src = PLUG_SUM),
+                                    ],
+                                ),
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "end",
+                                    children = [
+                                        render.Text(
+                                            content = " " + render_entity(energy_production),
+                                            font = "5x8",
+                                            color = GREEN,
+                                        ),
+                                        render.Text(
+                                            content = " " + render_entity(energy_consumption),
+                                            font = "5x8",
+                                            color = RED,
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        frames.append(summary_frame)
+
+    # AUTARKY FRAME
+    if autarky_day and autarky_week and autarky_month and autarky_year:
+        autarky_frame = render.Stack(
+            children = [
+                render.Box(
+                    height = 32,
+                    width = 64,
+                    child = render.Image(src = AUTARKY_16x16),
+                ),
+                render.Column(
+                    # column for the top
+                    main_align = "start",
+                    expanded = True,
+                    children = [
+                        # top row
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_between",
+                            children = [
+                                render.Row([render.Text(LANGUAGE_LOCALES["Today:"][lang], font = "tom-thumb", color = GRAY)]),
+                                render.Row([render.Text(LANGUAGE_LOCALES["Month:"][lang], font = "tom-thumb", color = GRAY)]),
+                            ],
+                        ),
+
+                        # second row
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_between",
+                            cross_align = "end",
+                            children = [
+                                render.Row([render.Text(" " + render_entity(autarky_day, dec = 0), color = GREEN)]),
+                                render.Row([render.Text(render_entity(autarky_month, dec = 0), color = GREEN)]),
+                            ],
+                        ),
+                    ],
+                ),
+                render.Column(
+                    main_align = "end",
+                    expanded = True,
+                    children = [
+                        # third row
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_between",
+                            children = [
+                                render.Row([render.Text(LANGUAGE_LOCALES["Week:"][lang], font = "tom-thumb", color = GRAY)]),
+                                render.Row([render.Text(LANGUAGE_LOCALES["Year:"][lang], font = "tom-thumb", color = GRAY)]),
+                            ],
+                        ),
+
+                        # fourth row
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_between",
+                            cross_align = "end",
+                            children = [
+                                render.Row([render.Text(" " + render_entity(autarky_week, dec = 0), color = GREEN)]),
+                                render.Row([render.Text(render_entity(autarky_year, dec = 0), color = GREEN)]),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        frames.append(autarky_frame)
+
+    # EV CHARGING FRAME
+    if energy_ev_day and energy_ev_week and energy_ev_month:
+        ev_energy_frame = render.Stack(
+            children = [
+                render.Column(
+                    main_align = "space_evenly",  # this controls position of children, start = top
+                    expanded = True,
+                    cross_align = "center",
+                    children = [
+                        render.Text(LANGUAGE_LOCALES["EV Energy"][lang], font = "tom-thumb"),
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_between",
+                            children = [
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "center",
+                                    #cross_align = "center",
+                                    children = [
+                                        render.Image(src = EV_CHARGING_16x16),
+                                    ],
+                                ),
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "start",
+                                    children = [
+                                        render.Text(
+                                            content = LANGUAGE_LOCALES["D"][lang],
+                                            font = "5x8",
+                                            color = GRAY,
+                                        ),
+                                        render.Text(
+                                            content = LANGUAGE_LOCALES["W"][lang],
+                                            font = "5x8",
+                                            color = GRAY,
+                                        ),
+                                        render.Text(
+                                            content = LANGUAGE_LOCALES["M"][lang],
+                                            font = "5x8",
+                                            color = GRAY,
+                                        ),
+                                    ],
+                                ),
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "end",
+                                    children = [
+                                        render.Text(
+                                            content = render_entity(energy_ev_day, with_unit = False, dec = 0),
+                                            font = "5x8",
+                                            color = GREEN,
+                                        ),
+                                        render.Text(
+                                            content = render_entity(energy_ev_week, with_unit = False, dec = 0),
+                                            font = "5x8",
+                                            color = GREEN,
+                                        ),
+                                        render.Text(
+                                            content = render_entity(energy_ev_month, with_unit = False, dec = 0),
+                                            font = "5x8",
+                                            color = GREEN,
+                                        ),
+                                    ],
+                                ),
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "start",
+                                    children = [
+                                        render.Text(
+                                            content = " kWh",
+                                            font = "5x8",
+                                            color = GRAY,
+                                        ),
+                                        render.Text(
+                                            content = " kWh",
+                                            font = "5x8",
+                                            color = GRAY,
+                                        ),
+                                        render.Text(
+                                            content = " kWh",
+                                            font = "5x8",
+                                            color = GRAY,
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )
+        frames.append(ev_energy_frame)
 
     # EV battery soc frame
     ###############################################
-    ev_id = config.get("ev_id", "")
-    if ev_id != "" and ev_id in data:
-        ev_soc = " " + str(data[ev_id]) + " %"
-    else:
-        ev_soc = " Not Found"
-    ev_frame = render.Stack(
-        children = [
-            render.Column(
-                main_align = "space_evenly",  # this controls position of children, start = top
-                expanded = True,
-                cross_align = "center",
-                children = [
-                    render.Row(
-                        expanded = True,
-                        main_align = "space_evenly",
-                        cross_align = "center",
-                        children = [
-                            render.Text(config.get("ev_name", "EV")),
-                        ],
-                    ),
-                    render.Row(
-                        #expanded = True,
-                        children = [
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "center",
-                                children = [
-                                    render.Image(src = get_ev_logo(config.get("ev_icon"))),
-                                    # render.Image(src = PLUG_SUM),
-                                ],
-                            ),
-                            render.Column(
-                                expanded = True,
-                                main_align = "space_around",
-                                cross_align = "end",
-                                children = [
-                                    render.Text(
-                                        content = ev_soc,
-                                        font = "5x8",
-                                        color = GREEN,
-                                    ),
-                                    # render.Text(
-                                    #     content = " " + w2kwstr(data["consumption"], dec = 0) + " kWh",
-                                    #     font = "5x8",
-                                    #     color = RED,
-                                    # ),
-                                ],
-                            ),
-                        ],
-                    ),
-                ],
-            ),
-        ],
-    )
-
-    if config.bool("show_logo", False):
-        frames.append(logo_frame)
-    if config.bool("show_main", True):
-        frames.append(main_frame)
-    if config.bool("show_char", False) and has_battery:
-        frames.append(charge_frame)
-    if config.bool("show_prod", False):
-        frames.append(production_frame)
-    if config.bool("show_cons", False):
-        frames.append(verbrauch_frame)
-    if config.bool("show_summary", False):
-        frames.append(summary_frame)
-    if config.bool("show_autarky", False):
-        frames.append(autarky_frame)
-    if config.get("aux_sensor_id", "") != "":
-        frames.append(sensor_frame)
-    if config.get("ev_id", "") != "":
+    if soc_ev:
+        ev_frame = render.Stack(
+            children = [
+                render.Column(
+                    main_align = "space_evenly",  # this controls position of children, start = top
+                    expanded = True,
+                    cross_align = "center",
+                    children = [
+                        render.Row(
+                            expanded = True,
+                            main_align = "space_evenly",
+                            cross_align = "center",
+                            children = [
+                                render.Text(config.get("ev_name", "EV")),
+                            ],
+                        ),
+                        render.Row(
+                            #expanded = True,
+                            children = [
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "center",
+                                    children = [
+                                        render.Image(src = get_ev_logo(config.get("ev_icon", "TESLA"))),
+                                        # render.Image(src = PLUG_SUM),
+                                    ],
+                                ),
+                                render.Column(
+                                    expanded = True,
+                                    main_align = "space_around",
+                                    cross_align = "end",
+                                    children = [
+                                        render.Text(
+                                            content = render_entity(soc_ev),
+                                            font = "5x8",
+                                            color = GREEN,
+                                        ),
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        )
         frames.append(ev_frame)
 
     if len(frames) == 1:
@@ -911,7 +866,7 @@ def main(config):
         return render.Root(main_frame)
     else:
         return render.Root(
-            #show_full_animation = True,
+            show_full_animation = True,
             delay = int(config.get("frame_delay", "3")) * 1000,
             child = render.Animation(children = frames),
         )
@@ -942,27 +897,111 @@ def get_ev_logo(name):
     else:
         return BMW_LOGO_18x18
 
-def format_power(p):
-    if p:
-        return humanize.float("#,###.##", p)
-    else:
-        return "0"
-
 def get_schema():
     return schema.Schema(
         version = "1",
         fields = [
             schema.Text(
-                id = "api_key",
-                name = "API key",
-                desc = "API key for the SolarManager monitoring API. Authorize with your solarmanager username and password on: https://external-web.solar-manager.ch/swagger and copy the long string that follows after '-H authorization: Basic'",
-                icon = "key",
+                id = HA_URL,
+                name = "Home Assistant URL",
+                desc = "The address of your HomeAssistant instance, as a full URL.",
+                icon = "book",
             ),
             schema.Text(
-                id = "site_id",
-                name = "Site ID",
-                desc = "Your site ID. Check the back of your solarmanager device for the SMID code.",
-                icon = "hashtag",
+                id = HA_TOKEN,
+                name = "HomeAssistant Token",
+                desc = "Find in User Settings > Long-lived access tokens.",
+                icon = "book",
+            ),
+            schema.Text(
+                id = ENTITY_ENERGY_PRODUCTION,
+                name = "Energy production today",
+                desc = "Entity ID (e.g. sensor.energy_production)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_ENERGY_CONSUMPTION,
+                name = "Energy consumption today",
+                desc = "Entity ID (e.g. sensor.energy_consumption)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_POWER_SOLAR,
+                name = "Current solar power",
+                desc = "Entity ID (e.g. sensor.power_solar)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_POWER_GRID,
+                name = "Current grid power (positive = export, negative = import)",
+                desc = "Entity ID (e.g. sensor.solaredge_m1_ac_power)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_POWER_LOAD,
+                name = "Current load power (consumption)",
+                desc = "Entity ID (e.g. sensor.power_consumption)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_POWER_BATTERY,
+                name = "Current battery power (positive = charging)",
+                desc = "Entity ID (e.g. sensor.power_battery)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_SOC_BATTERY,
+                name = "Current battery state of charge (charging level)",
+                desc = "Entity ID (e.g. sensor.solaredge_b1_state_of_energy)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_SOC_EV,
+                name = "Current EV state of charge",
+                desc = "Entity ID (e.g. sensor.tesla_battery)",
+                icon = "carBattery",
+            ),
+            schema.Text(
+                id = ENTITY_ENERGY_EV_DAY,
+                name = "Energy used for charging today",
+                desc = "Entity ID (e.g. sensor.energy_ev_today)",
+                icon = "carBattery",
+            ),
+            schema.Text(
+                id = ENTITY_ENERGY_EV_WEEK,
+                name = "Energy used for charging this week",
+                desc = "Entity ID (e.g. sensor.energy_ev_week)",
+                icon = "carBattery",
+            ),
+            schema.Text(
+                id = ENTITY_ENERGY_EV_MONTH,
+                name = "Energy used for charging this month",
+                desc = "Entity ID (e.g. sensor.energy_ev_month)",
+                icon = "carBattery",
+            ),
+            schema.Text(
+                id = ENTITY_AUTARKY_DAY,
+                name = "Autarky ratio today",
+                desc = "Entity ID (e.g. sensor.steps)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_AUTARKY_WEEK,
+                name = "Autarky ratio in the current week",
+                desc = "Entity ID (e.g. sensor.steps)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_AUTARKY_MONTH,
+                name = "Autarky ratio in the current month",
+                desc = "Entity ID (e.g. sensor.steps)",
+                icon = "1",
+            ),
+            schema.Text(
+                id = ENTITY_AUTARKY_YEAR,
+                name = "Autarky ratio in the current year",
+                desc = "Entity ID (e.g. sensor.steps)",
+                icon = "1",
             ),
             schema.Toggle(
                 id = "show_main",
@@ -992,65 +1031,6 @@ def get_schema():
                 icon = "plugCircleBolt",
                 default = False,
             ),
-            schema.Toggle(
-                id = "show_summary",
-                name = "Show Daily Summary",
-                desc = "Accumulated daily energy production and consumption.",
-                icon = "chartLine",
-                default = True,
-            ),
-            schema.Toggle(
-                id = "show_logo",
-                name = "Show Logo Frame",
-                desc = "Solar Manager Logo",
-                icon = "compress",
-                default = False,
-            ),
-            schema.Toggle(
-                id = "show_autarky",
-                name = "Show Autarky Frame",
-                desc = "Display the 4 Autarky values for day,week,month,year",
-                icon = "compress",
-                default = False,
-            ),
-            schema.Text(
-                id = "aux_sensor_id",
-                name = "Aux Sensor ID",
-                desc = "Aux Senso ID",
-                icon = "hashtag",
-                default = "",
-            ),
-            schema.Text(
-                id = "aux_sensor_label",
-                name = "Aux Sensor Label",
-                desc = "Aux Senso Label",
-                icon = "hashtag",
-                default = "",
-            ),
-            schema.Dropdown(
-                id = "aux_icon",
-                name = "Aux Icon",
-                desc = "Icon Selection",
-                icon = "hashtag",
-                default = "EV",
-                options = [
-                    schema.Option(
-                        display = "EV",
-                        value = "EV",
-                    ),
-                    schema.Option(
-                        display = "Generic",
-                        value = "Generic",
-                    ),
-                ],
-            ),
-            schema.Text(
-                id = "ev_id",
-                name = "EV Battery ID",
-                desc = "EV Battery ID",
-                icon = "hashtag",
-                default = "",
-            ),
             schema.Text(
                 id = "ev_name",
                 name = "EV Name",
@@ -1063,16 +1043,8 @@ def get_schema():
                 name = "EV Brand",
                 desc = "Logo Selection",
                 icon = "hashtag",
-                default = TESLA_LOGO_18x18,
+                default = "TESLA",
                 options = [
-                    schema.Option(
-                        display = "VW",
-                        value = "VW",
-                    ),
-                    schema.Option(
-                        display = "Tesla",
-                        value = "TESLA",
-                    ),
                     schema.Option(
                         display = "Audi",
                         value = "AUDI",
@@ -1082,12 +1054,16 @@ def get_schema():
                         value = "BMW",
                     ),
                     schema.Option(
-                        display = "Seat",
-                        value = "SEAT",
+                        display = "Cupra",
+                        value = "CUPRA",
                     ),
                     schema.Option(
-                        display = "Skoda",
-                        value = "SKODA",
+                        display = "FIAT",
+                        value = "FIAT",
+                    ),
+                    schema.Option(
+                        display = "Hyundai",
+                        value = "HYUNDAI",
                     ),
                     schema.Option(
                         display = "Opel",
@@ -1098,16 +1074,20 @@ def get_schema():
                         value = "RENAULT",
                     ),
                     schema.Option(
-                        display = "Hyundai",
-                        value = "HYUNDAI",
+                        display = "Seat",
+                        value = "SEAT",
                     ),
                     schema.Option(
-                        display = "Cupra",
-                        value = "CUPRA",
+                        display = "Skoda",
+                        value = "SKODA",
                     ),
                     schema.Option(
-                        display = "FIAT",
-                        value = "FIAT",
+                        display = "VW",
+                        value = "VW",
+                    ),
+                    schema.Option(
+                        display = "Tesla",
+                        value = "TESLA",
                     ),
                 ],
             ),
@@ -1138,6 +1118,17 @@ def get_schema():
                         display = "5 sec",
                         value = "5",
                     ),
+                ],
+            ),
+            schema.Dropdown(
+                id = "lang",
+                name = "Language",
+                desc = "The language to display the information",
+                icon = "language",
+                default = "en",
+                options = [
+                    schema.Option(display = "Deutsch", value = "de"),
+                    schema.Option(display = "English", value = "en"),
                 ],
             ),
         ],
