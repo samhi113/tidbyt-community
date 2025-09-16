@@ -69,7 +69,7 @@ DEFAULT_REGION = "us"
 DEFAULT_AUTH_TTL = 86399
 
 CURRENT_EXPANSION = "The War Within"
-CURRENT_INSTANCE = "Nerub-ar Palace"
+CURRENT_INSTANCE = "Liberation of Undermine"
 
 def main(config):
     client_id = secret.decrypt(
@@ -78,7 +78,7 @@ def main(config):
         "client_id",
     )
     client_secret = secret.decrypt(
-        "AV6+xWcEZuh8G2FXn03PHZITYHtF/oL7Le4fYLo/OV52OGolnzs4l3/vmv8KC/j8vxtf2fQYmarFevJ/TNNvVD4YckNG+GpiLG4Azf0JdMSFj7E9uvbtSjue3Tj9sQOOdA8g8L7CGcQ25HFYLoc5K6zJkK6dpiwMzk69Y+vXGikWYejubyM=",
+        "AV6+xWcEghHB4IYtF4KGd4dBFfKi4eiY9kyAQp9NHc/Lpe+IF6YkwIOyT/09XYEmZJZnUFmcgbIeot1x6JZgzIp9gEwvfHboAIN3L0r7iTrjQTylskTkGB2oQ/0Unkmii//7khorLAJ6CW3UxN6BnRuK9prp6gfHynAFwOykcPMArz5TMQ8=",
     ) or config.get(
         "client_secret",
     )
@@ -87,9 +87,9 @@ def main(config):
     region = config.get("region", DEFAULT_REGION)
 
     blizzard_auth_url = "https://oauth.battle.net/token?grant_type=client_credentials"
-    blizzard_profile_url = "https://%s.api.blizzard.com/profile/wow/character/%s/%s?namespace=profile-%s&locale=en_US&access_token=" % (region, realm_name, character_name, region)
-    blizzard_mythic_url = "https://%s.api.blizzard.com/profile/wow/character/%s/%s/mythic-keystone-profile?namespace=profile-%s&locale=en_US&access_token=" % (region, realm_name, character_name, region)
-    blizzard_raid_url = "https://%s.api.blizzard.com/profile/wow/character/%s/%s/encounters/raids?namespace=profile-%s&locale=en_US&access_token=" % (region, realm_name, character_name, region)
+    blizzard_profile_url = "https://%s.api.blizzard.com/profile/wow/character/%s/%s?namespace=profile-%s&locale=en_US" % (region, realm_name, character_name, region)
+    blizzard_mythic_url = "https://%s.api.blizzard.com/profile/wow/character/%s/%s/mythic-keystone-profile?namespace=profile-%s&locale=en_US" % (region, realm_name, character_name, region)
+    blizzard_raid_url = "https://%s.api.blizzard.com/profile/wow/character/%s/%s/encounters/raids?namespace=profile-%s&locale=en_US" % (region, realm_name, character_name, region)
 
     access_token = get_auth_token(blizzard_auth_url, client_id, client_secret)
 
@@ -132,7 +132,7 @@ def main(config):
         faction_color = "#00f"
 
     return render.Root(
-        delay = 294,
+        delay = 3750,
         child = render.Column(
             expanded = True,
             main_align = "space_around",
@@ -152,39 +152,43 @@ def main(config):
                     cross_align = "center",
                     children = [
                         render.Padding(
-                            pad = (2, 1, 1, 1),
+                            pad = (2, 1, 0, 1),
                             child = render.Image(src = determine_icon(player_profile)),
                         ),
-                        render.Padding(
-                            pad = (2, 1, 2, 1),
-                            child = render.Sequence(
+                        render.Box(
+                            height = 24,
+                            width = 40,
+                            padding = 1,
+                            child = render.Animation(
                                 children = [
-                                    render.Marquee(
-                                        width = 36,
-                                        height = 22,
-                                        scroll_direction = "vertical",
-                                        offset_start = 22,
-                                        # offset_end = 0,
-                                        child = render.Column(
-                                            cross_align = "center",
-                                            children = [
-                                                render.Text(
-                                                    content = "lvl %d" % player_profile["level"],
-                                                    font = "tom-thumb",
-                                                ),
-                                                render.Text(
-                                                    content = "%s" % player_profile["faction"]["name"],
-                                                    font = "tom-thumb",
-                                                    color = faction_color,
-                                                ),
-                                                render.Text(
-                                                    content = "ilvl %d" % player_profile["equipped_item_level"],
-                                                    font = "tom-thumb",
-                                                ),
-                                                get_mythic_plus_io(player_mythic),
-                                                get_raid_progress(player_raids),
-                                            ],
-                                        ),
+                                    render.Column(
+                                        cross_align = "center",
+                                        main_align = "space_evenly",
+                                        expanded = True,
+                                        children = [
+                                            render.Text(
+                                                content = "lvl %d" % player_profile["level"],
+                                                font = "tom-thumb",
+                                            ),
+                                            render.Text(
+                                                content = "%s" % player_profile["faction"]["name"],
+                                                font = "tom-thumb",
+                                                color = faction_color,
+                                            ),
+                                            render.Text(
+                                                content = "ilvl %d" % player_profile["equipped_item_level"],
+                                                font = "tom-thumb",
+                                            ),
+                                        ],
+                                    ),
+                                    render.Column(
+                                        cross_align = "center",
+                                        main_align = "space_evenly",
+                                        expanded = True,
+                                        children = [
+                                            get_mythic_plus_io(player_mythic),
+                                            get_raid_progress(player_raids),
+                                        ],
                                     ),
                                 ],
                             ),
@@ -265,7 +269,10 @@ def get_auth_token(url, id, secret):
     return token
 
 def fetch_data(url, token):
-    response = http.get("%s%s" % (url, token), ttl_seconds = 300)
+    headers = {
+        "Authorization": "Bearer %s" % token,
+    }
+    response = http.get(url, headers = headers, ttl_seconds = 300)
     if response.status_code != 200:
         print("Blizzard request failed with status %d" % response.status_code)
         return None
